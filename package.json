@@ -1,21 +1,30 @@
-{
-  "name": "ssgpt6-demo",
-  "version": "1.0.0",
-  "private": true,
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
-  },
-  "dependencies": {
-    "next": "15.3.8",
-    "react": "19.0.0",
-    "react-dom": "19.0.0"
+import { NextResponse } from 'next/server';
+import type { NextRequest } from 'next/server';
+
+export async function middleware(request: NextRequest) {
+  const token = request.cookies.get('auth_token')?.value;
+
+  // 1. Consult your Sweet Quantum AI "Black Box"
+  const response = await fetch(process.env.AGENT_ENDPOINT + '/verify', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.QUANTUM_AI_TOKEN}`
+    },
+    body: JSON.stringify({ token })
+  });
+
+  const { authorized } = await response.json();
+
+  // 2. Authorize or Redirect
+  if (!authorized) {
+    return NextResponse.redirect(new URL('/login', request.url));
   }
+
+  return NextResponse.next();
 }
-{
-  "engines": {
-    "pnpm": "^7.5.1"
-  },
-  "packageManager": "pnpm@7.5.1"
-}
+
+// Only run on specific paths (e.g., dashboard)
+export const config = {
+  matcher: ['/dashboard/:path*', '/api/protected/:path*'],
+};
