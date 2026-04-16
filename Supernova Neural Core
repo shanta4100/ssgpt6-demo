@@ -1,0 +1,145 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing import Dict, Tuple, Optional
+
+class SupernovaNeuralCore(nn.Module):
+    """
+    Supernova Neural Core - Real-time cognitive state detector
+    Inputs: gameplay telemetry features (per frame)
+    Outputs: stress, frustration, fatigue scores + safe tuning signals
+    """
+    
+    def __init__(self, 
+                 input_dim: int = 8,          # e.g. RT, accuracy, rhythm_var, motion_intensity, audio_bands...
+                 hidden_dim: int = 128,
+                 num_heads: int = 4,
+                 dropout: float = 0.1):
+        super().__init__()
+        
+        self.input_dim = input_dim
+        self.hidden_dim = hidden_dim
+        
+        # 1. Lightweight feature extraction (1D Conv for local patterns)
+        self.feature_extractor = nn.Sequential(
+            nn.Conv1d(input_dim, hidden_dim//2, kernel_size=3, padding=1),
+            nn.BatchNorm1d(hidden_dim//2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Conv1d(hidden_dim//2, hidden_dim, kernel_size=3, padding=1),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+        )
+        
+        # 2. Temporal modeling - GRU (fast + efficient) + Multi-head Attention
+        self.gru = nn.GRU(hidden_dim, hidden_dim, num_layers=2, 
+                         batch_first=True, bidirectional=False, dropout=dropout)
+        
+        self.attention = nn.MultiheadAttention(
+            embed_dim=hidden_dim, 
+            num_heads=num_heads, 
+            dropout=dropout,
+            batch_first=True
+        )
+        
+        # 3. Multi-time-scale pooling (for 5s / 30s / 120s reports)
+        self.pool_short = nn.AdaptiveAvgPool1d(1)   # ~5s window
+        self.pool_medium = nn.AdaptiveAvgPool1d(1)  # ~30s
+        self.pool_long = nn.AdaptiveAvgPool1d(1)    # ~120s
+        
+        # 4. Multi-task output heads
+        self.stress_head = nn.Sequential(
+            nn.Linear(hidden_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 1),          # stress score [0, 1]
+            nn.Sigmoid()
+        )
+        
+        self.frustration_head = nn.Sequential(
+            nn.Linear(hidden_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 1),          # frustration score [0, 1]
+            nn.Sigmoid()
+        )
+        
+        self.fatigue_head = nn.Sequential(
+            nn.Linear(hidden_dim, 64),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(64, 1),          # fatigue score [0, 1]
+            nn.Sigmoid()
+        )
+        
+        # 5. Safe tuning feedback (simple regression to game parameters)
+        self.tuning_head = nn.Sequential(
+            nn.Linear(hidden_dim * 3, 64),   # concat short/medium/long
+            nn.ReLU(),
+            nn.Linear(64, 3)                 # e.g. difficulty_multiplier, intensity, comfort_mode
+        )
+        
+    def forward(self, 
+                x: torch.Tensor, 
+                return_all: bool = False) -> Dict[str, torch.Tensor]:
+        """
+        x: (batch, seq_len, input_dim) - sequence of telemetry frames
+        """
+        batch_size, seq_len, _ = x.shape
+        
+        # Move to (batch, features, seq) for Conv1d
+        x = x.transpose(1, 2)                    # (B, input_dim, seq_len)
+        features = self.feature_extractor(x)     # (B, hidden_dim, seq_len)
+        features = features.transpose(1, 2)      # (B, seq_len, hidden_dim)
+        
+        # GRU temporal modeling
+        gru_out, _ = self.gru(features)          # (B, seq_len, hidden_dim)
+        
+        # Multi-head self-attention
+        attn_out, _ = self.attention(gru_out, gru_out, gru_out)
+        combined = gru_out + attn_out            # residual connection
+        
+        # Multi-scale pooling (simulate different report windows)
+        short_feat = self.pool_short(combined.transpose(1, 2)).squeeze(-1)   # ~5s
+        medium_feat = self.pool_medium(combined.transpose(1, 2)).squeeze(-1) # ~30s
+        long_feat = self.pool_long(combined.transpose(1, 2)).squeeze(-1)     # ~120s
+        
+        # Multi-task predictions
+        stress = self.stress_head(short_feat)      # fast alerts
+        frustration = self.frustration_head(medium_feat)
+        fatigue = self.fatigue_head(long_feat)
+        
+        # Safe tuning signal (uses all scales)
+        tuning_input = torch.cat([short_feat, medium_feat, long_feat], dim=1)
+        tuning = self.tuning_head(tuning_input)    # e.g. [diff_mult, intensity, comfort_flag]
+        
+        output = {
+            "stress": stress,
+            "frustration": frustration,
+            "fatigue": fatigue,
+            "safe_tuning": tuning,          # [difficulty, visual_intensity, comfort_mode]
+            "confidence": torch.ones(batch_size, 1, device=x.device)  # placeholder
+        }
+        
+        if return_all:
+            output["short_features"] = short_feat
+            output["medium_features"] = medium_feat
+            output["long_features"] = long_feat
+            
+        return output
+
+
+# ============== Example Usage ==============
+if __name__ == "__main__":
+    # Simulate telemetry input: batch=1, seq_len=120 frames (~2 minutes at 1s/frame)
+    model = SupernovaNeuralCore(input_dim=8, hidden_dim=128)
+    model.eval()
+    
+    dummy_input = torch.randn(1, 120, 8)   # (batch, seq_len, features)
+    
+    with torch.no_grad():
+        results = model(dummy_input, return_all=True)
+    
+    print("Supernova Neural Core Output:")
+    for key, val in results.items():
+        print(f"  {key:15}: {val.shape} → {val.mean().item():.4f}")
