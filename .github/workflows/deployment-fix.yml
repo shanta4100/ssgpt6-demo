@@ -1,0 +1,27 @@
+name: Deployment Fix
+
+on:
+  pull_request:
+    types: [review_requested, review_submitted, edited]
+
+jobs:
+  deployment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '14'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run deployment script
+        env:
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+        run: |
+          # Your deployment script here
+          echo "Deploying with a Personal Access Token"
