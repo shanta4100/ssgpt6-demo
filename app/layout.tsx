@@ -1,6 +1,6 @@
 export const metadata = {
   title: "SSGPT6 Demo",
-  description: "SSGPT6 pilot-ready automation platform"
+  description: "SSGPT6 pilot-ready automation platform",
 };
 
 export default function RootLayout({
