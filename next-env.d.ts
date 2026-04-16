@@ -1,2 +1,3 @@
-/// <reference types="next" />
-/// <reference types="next/image-types/global" />
+      env:
+-         BASE_URL: ${{ github.event.deployment_status.environment_url }}
++         BASE_URL: ${{ github.event.client_payload.url }}
