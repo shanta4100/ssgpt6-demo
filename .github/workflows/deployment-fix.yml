@@ -2,7 +2,7 @@ name: Deployment Fix
 
 on:
   pull_request:
-    types: [review_requested]
+    types: [review_requested, review_submitted]
 
 permissions:
   contents: read
@@ -14,6 +14,9 @@ concurrency:
 jobs:
   deployment:
     runs-on: ubuntu-latest
+    env:
+      RATE_LIMIT_MIN_REMAINING: 100
+      RATE_LIMIT_PAUSE_SECONDS: 120
     steps:
       - name: Check out code
         uses: actions/checkout@v4
@@ -21,16 +24,22 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
       - name: Install dependencies
         run: npm install
 
       - name: Run deployment script
         env:
-          GH_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
-          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN || github.token }}
+          PERSONAL_ACCESS_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          FALLBACK_GITHUB_TOKEN: ${{ github.token }}
         run: |
+          if [ -n "$PERSONAL_ACCESS_TOKEN" ]; then
+            export GH_TOKEN="$PERSONAL_ACCESS_TOKEN"
+          else
+            export GH_TOKEN="$FALLBACK_GITHUB_TOKEN"
+          fi
+
           run_with_retry() {
             local retries=3
             local attempt=1
@@ -51,4 +60,22 @@ jobs:
             done
           }
 
-          run_with_retry bash -c 'echo "Deploying with optimized token and retry handling"'
+          if ! remaining="$(run_with_retry gh api /rate_limit --jq '.resources.core.remaining')"; then
+            echo "Failed to check GitHub API rate limit after retries" >&2
+            exit 1
+          fi
+          if [ "$remaining" -le "$RATE_LIMIT_MIN_REMAINING" ]; then
+            echo "Rate limit below threshold ($remaining remaining), waiting ${RATE_LIMIT_PAUSE_SECONDS}s..."
+            sleep "$RATE_LIMIT_PAUSE_SECONDS"
+
+            if ! remaining="$(run_with_retry gh api /rate_limit --jq '.resources.core.remaining')"; then
+              echo "Failed to re-check GitHub API rate limit after waiting" >&2
+              exit 1
+            fi
+            if [ "$remaining" -le "$RATE_LIMIT_MIN_REMAINING" ]; then
+              echo "GitHub API rate limit remains too low after waiting ($remaining remaining)" >&2
+              exit 1
+            fi
+          fi
+
+          npm run build --if-present
