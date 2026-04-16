@@ -33,11 +33,7 @@ export default class ErrorBoundary extends React.Component<
     }
 
     const { title } = this.props
-    const { error } = this.state
-
-    if (!error) {
-      return this.props.children
-    }
+    const error = this.state.error
 
     return (
       <div>
